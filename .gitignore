@@ -1,0 +1,8 @@
+# Secrets and per-run files: never committed
+.env
+certs/
+kong/certs.yaml
+plan*.json
+*.key
+*.pem
+.DS_Store

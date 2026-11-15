@@ -1,0 +1,8 @@
+# CLI tools for this repo: latest stable releases, pinned exactly. Run `mise install` once.
+min_version = "2026.9.9"
+
+[tools]
+"github:Kong/kongctl" = "1.28.1"
+deck = "1.70.1"
+jq = "1.8.2"
+gitleaks = "8.30.1"

@@ -1,0 +1,38 @@
+# A Kong Gateway data plane connected to a Konnect control plane, and an echo upstream that shows
+# the headers Kong sends it.
+name: mtls-identity
+
+services:
+  kong:
+    image: kong/kong-gateway:3.16.0.2@sha256:2c9e1ea74e472a416c6169c38d3e7b0372d372ae53a1fb45e43b104727011d6e
+    restart: unless-stopped
+    depends_on: [orders]
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8443}:8443"   # HTTPS proxy, reachable from this host only
+    environment:
+      KONG_ROLE: data_plane
+      KONG_DATABASE: "off"
+      KONG_KONNECT_MODE: "on"
+      KONG_CLUSTER_MTLS: pki
+      KONG_CLUSTER_CONTROL_PLANE: ${KONG_CLUSTER_CONTROL_PLANE:?run make up}
+      KONG_CLUSTER_SERVER_NAME: ${KONG_CLUSTER_SERVER_NAME}
+      KONG_CLUSTER_TELEMETRY_ENDPOINT: ${KONG_CLUSTER_TELEMETRY_ENDPOINT}
+      KONG_CLUSTER_TELEMETRY_SERVER_NAME: ${KONG_CLUSTER_TELEMETRY_SERVER_NAME}
+      KONG_CLUSTER_CERT: /certs/dp.crt
+      KONG_CLUSTER_CERT_KEY: /certs/dp.key
+      KONG_LUA_SSL_TRUSTED_CERTIFICATE: system
+      KONG_PROXY_LISTEN: "0.0.0.0:8443 ssl"
+      KONG_NGINX_WORKER_PROCESSES: "2"
+    volumes:
+      - ./certs/dp.crt:/certs/dp.crt:ro
+      - ./certs/dp.key:/certs/dp.key:ro
+    healthcheck:
+      test: ["CMD-SHELL", "kong-health"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  # Stands in for your API: echoes back the request, including the headers Kong added.
+  orders:
+    image: mccutchen/go-httpbin:2.26.0@sha256:873b4fdb27fe7cc66fa12cb9362574e1b0bf31df7ca8a71b2502988327a0b8a4
+    restart: unless-stopped

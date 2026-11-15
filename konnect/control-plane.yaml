@@ -1,0 +1,18 @@
+# The Konnect side, applied with kongctl: a hybrid control plane, the data plane's certificate,
+# and the gateway configuration (decK files, run by kongctl).
+_defaults:
+  kongctl:
+    namespace: mtls-identity
+
+control_planes:
+  - ref: mtls-identity
+    name: mtls-identity
+    description: "Client certificates as consumer identity (demo)"
+    cluster_type: CLUSTER_TYPE_CONTROL_PLANE
+    data_plane_certificates:
+      - ref: mtls-identity-dp
+        cert: !file ../certs/dp.crt
+    _deck:
+      files:
+        - ../kong/certs.yaml
+        - ../kong/kong.yaml
