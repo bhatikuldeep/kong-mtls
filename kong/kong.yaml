@@ -96,3 +96,28 @@ services:
             config:
               allow: [gold]
               include_consumer_groups: true
+
+  # Part 2: Kong presents its own client certificate to a backend that only accepts mTLS
+  - name: inventory-api
+    url: https://inventory:8443
+    client_certificate: 5b1e0c62-6f0a-4c39-9a11-000000000004   # the certificate Kong presents
+    tls_verify: true                                     # check the backend's certificate...
+    ca_certificates: [5b1e0c62-6f0a-4c39-9a11-000000000003]   # ...against the backend CA
+    routes:
+      - name: inventory
+        protocols: [https]
+        snis: [api.example.test]
+        paths: [/inventory]
+      # Bonus: this route also authenticates the client (Part 1), so the backend learns who called
+      - name: inventory-whoami
+        protocols: [https]
+        snis: [api.example.test]
+        paths: [/inventory/whoami]
+        plugins:
+          - name: mtls-auth
+            config:
+              ca_certificates:
+                - 5b1e0c62-6f0a-4c39-9a11-000000000001
+              ssl_verify: true
+              consumer_by: []
+              revocation_check_mode: SKIP

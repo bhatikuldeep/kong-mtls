@@ -6,7 +6,11 @@
 #   rogue               a self-signed certificate that claims to be client-a
 #   gateway-ca, gateway the certificate Kong serves for api.example.test, and the CA clients use to check it
 #   dp                  the data plane's certificate for its connection to Konnect
-# Then writes kong/certs.yaml: the decK file with the CA certificate (no key) and the gateway's server certificate.
+#   backend-ca          Part 2: the backend's CA; it signs the two certificates below
+#   inventory           Part 2: the certificate the backend serves (Kong checks it against backend-ca)
+#   kong-upstream       Part 2: the client certificate Kong presents to the backend
+# Then writes kong/certs.yaml: the decK file with the CA certificates (no keys), the gateway's server certificate
+# and the client certificate Kong presents to the backend.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p certs
@@ -49,6 +53,11 @@ leaf client-d client-ca client-d.example.test clientAuth
 ca gateway-ca "Example Gateway CA"
 leaf gateway gateway-ca api.example.test serverAuth
 
+# Part 2: the backend's CA, the backend's server certificate and Kong's client certificate for the backend
+ca backend-ca "Example Backend CA"
+leaf inventory backend-ca inventory serverAuth
+leaf kong-upstream backend-ca kong-gateway clientAuth
+
 [ -f dp.crt ] || openssl req -x509 -new -nodes -newkey rsa:2048 -days 365 -subj "/CN=mtls-identity-dp" \
   -keyout dp.key -out dp.crt 2>/dev/null
 
@@ -66,6 +75,9 @@ ca_certificates:
   - id: 5b1e0c62-6f0a-4c39-9a11-000000000001   # Example Client CA: public certificate only, no key
     cert: |
 $(indent client-ca.crt)
+  - id: 5b1e0c62-6f0a-4c39-9a11-000000000003   # Part 2: Example Backend CA, to check the backend's certificate
+    cert: |
+$(indent backend-ca.crt)
 certificates:
   - id: 5b1e0c62-6f0a-4c39-9a11-000000000002   # what Kong serves for api.example.test
     cert: |
@@ -74,5 +86,10 @@ $(indent gateway.crt)
 $(indent gateway.key)
     snis:
       - name: api.example.test
+  - id: 5b1e0c62-6f0a-4c39-9a11-000000000004   # Part 2: the client certificate Kong presents to the backend
+    cert: |
+$(indent kong-upstream.crt)
+    key: |
+$(indent kong-upstream.key)
 EOF
 echo "Certificates in certs/, valid for ${DAYS} days (the data plane's for 365)"

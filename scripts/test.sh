@@ -19,8 +19,19 @@ call() {
   headers=$(tr -d '\r' < /tmp/mtls-h.$$); rm -f /tmp/mtls-h.$$
   code=$(head -1 <<<"$headers" | awk '{print $2}')
 }
+field()    { jq -r "$1" <<<"$body" 2>/dev/null || echo "(not JSON)"; }   # a field of a JSON reply
 upstream() { jq -r --arg h "$1" '.headers[$h][0] // "absent"' <<<"$body"; }   # a header as the upstream saw it
 resp()     { awk -v h="$(tr 'A-Z' 'a-z' <<<"$1")" -F': ' 'tolower($1)==h {print $2}' <<<"$headers"; }
+
+# Rate limits count per minute. If earlier runs used up this minute's calls for gold (10) or silver (5),
+# wait for the next window, so every run checks the same things.
+wait=0
+for c in client-a:6 client-b:3; do
+  call "${c%%:*}" /orders
+  left=$(resp RateLimit-Remaining); reset=$(resp RateLimit-Reset)
+  [ "${left:-0}" -lt "${c##*:}" ] && [ "${reset:-0}" -gt "$wait" ] && wait=$reset
+done
+[ "$wait" -gt 0 ] && { echo "Waiting ${wait}s for a fresh rate-limit window"; sleep $((wait + 1)); }
 
 echo "1. Who gets in"
 call - /orders
@@ -42,13 +53,14 @@ echo "3. Limits per tier"
 check "gold limit"                               "$(resp RateLimit-Limit)" "10"
 call client-b /orders
 check "silver limit"                             "$(resp RateLimit-Limit)" "5"
-codes=""
+codes=""; limit=""
 for _ in 1 2 3 4; do
   call client-c /orders
-  [ "$code" = "200" ] && check "bronze limit" "$(resp RateLimit-Limit)" "3"
+  [ -n "$limit" ] || limit=$(resp RateLimit-Limit)   # first answer, 200 or 429, so the count never varies
   codes="$codes $code"
   [ "$code" = "429" ] && break
 done
+check "bronze limit"                             "$limit" "3"
 check "bronze: 429 within 4 calls ($codes )"     "$code $(jq -r .message <<<"$body")" "429 API rate limit exceeded"
 call client-a /orders
 check "gold client unaffected by bronze's limit" "$code" "200"
@@ -62,7 +74,23 @@ call client-a /reports
 check "gold allowed on /reports"                    "$code" "200"
 check "X-Consumer-Groups (set by the ACL plugin)" "$(upstream X-Consumer-Groups)" "gold"
 
-echo "5. Konnect matches the files (no drift)"
+echo "5. Kong to the backend (Part 2)"
+call - /inventory
+check "Kong presents its certificate: 200"          "$code" "200"
+check "the backend saw Kong's certificate"          "$(field .client_certificate)" "CN=kong-gateway"
+check "no client identity sent"                    "$code consumer='$(field .consumer)'" "200 consumer=''"
+call - /inventory -H 'X-Consumer-Username: admin'
+check "unauthenticated route passes a client-set header" "$(field .consumer)" "admin"
+code=$(curl -sk -o /dev/null -w '%{http_code}' "https://127.0.0.1:${BACKEND_PORT:-9443}/")
+check "the backend directly, no certificate: 400"   "$code" "400"
+call client-a /inventory/whoami
+check "bonus: client-a on /inventory/whoami: 200"   "$code" "200"
+check "bonus: the backend learns the consumer"      "$(field .consumer)" "client-a"
+check "bonus: still over Kong's certificate"        "$(field .client_certificate)" "CN=kong-gateway"
+call - /inventory/whoami
+check "bonus: no client certificate: 401"           "$code" "401"
+
+echo "6. Konnect matches the files (no drift)"
 cp_name=mtls-identity
 diff_out=$(DECK_KONNECT_TOKEN="$KONNECT_TOKEN" deck gateway diff kong/certs.yaml kong/kong.yaml \
   --konnect-addr "https://${KONNECT_REGION}.api.konghq.com" --konnect-control-plane-name "$cp_name" 2>&1 | grep -E "^ *(Created|Updated|Deleted):" | tr -s " " | xargs)
