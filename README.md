@@ -120,28 +120,7 @@ Every call now carries a consumer, so the ACL plugin and plugins scoped to a con
     | jq '.headers["X-Consumer-Groups"]'
   ```
 
-## Step 6: Clean up
-
-```bash
-make down    # remove the containers, keep Konnect and the certificates
-make clean   # also delete the Konnect control plane and the certificates
-```
-
-## Use it for your own API
-
-1. **Choose the client CA.** Recommended: the API team runs it, and each client app sends a CSR. If the client's organisation runs its own CA, it shares the CA certificate (never the key). Kong needs the certificate with `CA:TRUE`. Trust only CAs that control both the SAN and the CN they issue. If an intermediate CA signs the client certificates, upload the root and have client apps send the intermediate with their certificate, or upload the intermediate and set `allow_partial_chain: true`; `ca_certificate` pins point to the CA certificate you uploaded. Here, replace `client-ca.crt` in `kong/certs.yaml` (keep the ID).
-2. **Add mTLS Auth** to the service or route: `ca_certificates`, `ssl_verify: true`, `consumer_by: []`, and every route with `protocols: [https]` and its `snis`. For revocation, the default `revocation_check_mode`, `IGNORE_CA_ERROR`, checks the CRL or OCSP responder a certificate names and lets the call through if that check can't complete; `STRICT` rejects the call instead, so every client gets `401` while the responder is down. Here, point the `orders-api` service `url` at your backend.
-3. **Create one consumer per client app**, with an `mtls_auth_credentials` entry: `subject_name` is the name on the certificate, and `ca_certificate` pins it to its CA. mTLS Auth never creates consumers.
-4. **Issue the certificates.** The CA signs each CSR with the name in the SAN. Use short validity with automated renewal, and keep the CA key off the gateway. A renewed certificate with the same name keeps working. To cut one client off at once, delete its mTLS credential in Konnect: `make up` only creates and updates, so removing it from `kong/kong.yaml` alone doesn't delete it.
-5. **Test three cases:** a mapped certificate gets `200`, and no certificate or an unmapped one gets `401`.
-6. **Add consumer-based plugins** as needed. Rate limit counters with `strategy: local` are per node, so three data plane nodes allow three times the limit. `strategy: redis` gives one shared counter, exact with `sync_rate: 0`; `cluster` isn't available in hybrid mode or Konnect.
-
-Watch out for:
-
-- **TLS must end at Kong.** A CDN, WAF or L7 load balancer that ends TLS hides the certificate from Kong. Use TCP passthrough, or see [the edge bonus](#bonus-a-cdn-or-waf-ends-tls-in-front-of-kong).
-- **The gateway's server key** is in `kong/certs.yaml` here. In production, keep it in a vault and reference it.
-
-## Bonus: a CDN or WAF ends TLS in front of Kong
+## Step 6 (bonus): A CDN or WAF ends TLS in front of Kong
 
 When something in front of Kong ends TLS, the client certificate stops there. The edge can check it and forward it in a header to the [Header Cert Auth plugin](https://developer.konghq.com/plugins/header-cert-auth/) (Kong Gateway 3.8+). `make up` also starts `edge`, an nginx that plays that role on 127.0.0.1:7443 (`EDGE_PORT` in `.env`):
 
@@ -160,6 +139,27 @@ It ends with `10 passed, 0 failed`. The certificate `partner` maps to the consum
 - **Header format.** nginx sends the PEM certificate URL-encoded (`url_encoded`). `base64_encoded` expects base64 DER on one line, the format of Cloudflare's `Cf-Client-Cert-Der-Base64`. Cloudflare's [RFC 9440](https://www.rfc-editor.org/rfc/rfc9440) `Client-Cert` header wraps it in colons, which Kong 3.16 answers with `500`; strip them with a Pre-function first (see the blog post).
 - **decK 1.70.1 rejects Header Cert Auth credentials** (`header_cert_auth_credentials`). Map with `consumer_by: [username]`, a consumer named after the certificate, or use `skip_consumer_lookup`. Client-a, which has only an mTLS Auth credential, gets `401` on `/edge/orders`.
 
+## Step 7: Clean up
+
+```bash
+make down    # remove the containers, keep Konnect and the certificates
+make clean   # also delete the Konnect control plane and the certificates
+```
+
+## Use it for your own API
+
+1. **Choose the client CA.** Recommended: the API team runs it, and each client app sends a CSR. If the client's organisation runs its own CA, it shares the CA certificate (never the key). Kong needs the certificate with `CA:TRUE`. Trust only CAs that control both the SAN and the CN they issue. If an intermediate CA signs the client certificates, upload the root and have client apps send the intermediate with their certificate, or upload the intermediate and set `allow_partial_chain: true`; `ca_certificate` pins point to the CA certificate you uploaded. Here, replace `client-ca.crt` in `kong/certs.yaml` (keep the ID).
+2. **Add mTLS Auth** to the service or route: `ca_certificates`, `ssl_verify: true`, `consumer_by: []`, and every route with `protocols: [https]` and its `snis`. For revocation, the default `revocation_check_mode`, `IGNORE_CA_ERROR`, checks the CRL or OCSP responder a certificate names and lets the call through if that check can't complete; `STRICT` rejects the call instead, so every client gets `401` while the responder is down. Here, point the `orders-api` service `url` at your backend.
+3. **Create one consumer per client app**, with an `mtls_auth_credentials` entry: `subject_name` is the name on the certificate, and `ca_certificate` pins it to its CA. mTLS Auth never creates consumers.
+4. **Issue the certificates.** The CA signs each CSR with the name in the SAN. Use short validity with automated renewal, and keep the CA key off the gateway. A renewed certificate with the same name keeps working. To cut one client off at once, delete its mTLS credential in Konnect: `make up` only creates and updates, so removing it from `kong/kong.yaml` alone doesn't delete it.
+5. **Test three cases:** a mapped certificate gets `200`, and no certificate or an unmapped one gets `401`.
+6. **Add consumer-based plugins** as needed. Rate limit counters with `strategy: local` are per node, so three data plane nodes allow three times the limit. `strategy: redis` gives one shared counter, exact with `sync_rate: 0`; `cluster` isn't available in hybrid mode or Konnect.
+
+Watch out for:
+
+- **TLS must end at Kong.** A CDN, WAF or L7 load balancer that ends TLS hides the certificate from Kong. Use TCP passthrough, or see [the edge bonus](#step-6-bonus-a-cdn-or-waf-ends-tls-in-front-of-kong).
+- **The gateway's server key** is in `kong/certs.yaml` here. In production, keep it in a vault and reference it.
+
 ## Part 2: Set up mTLS from Kong to the backend
 
 The backend (nginx) only accepts callers with a certificate from the backend CA. Kong presents `kong-upstream.crt` and checks the backend's certificate: signed by the same CA, with the service's host (`inventory`) as a name. `/inventory` doesn't authenticate callers: mTLS to the backend proves who Kong is, not who the caller is. Bonus: a second route also authenticates the client (Part 1), so the backend learns who called, only where it needs to.
@@ -170,7 +170,7 @@ The backend (nginx) only accepts callers with a certificate from the backend CA.
 | Anyone → backend directly, no certificate | `400 No required SSL certificate was sent` |
 | Bonus: client-a → Kong → backend, `/inventory/whoami` | `200`; the backend also learns the consumer, `client-a` |
 
-Step 1 and Step 6 are the same as Part 1. The `api` helper and `u` come from Part 1's Step 4.
+Step 1 and Step 7 are the same as Part 1. The `api` helper and `u` come from Part 1's Step 4.
 
 ### Step 2: Check the certificates
 
