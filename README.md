@@ -1,7 +1,7 @@
 # Kong mTLS: client certificates in both directions
 
-- **Part 1: Authenticate API clients with certificates in Kong.** Client apps prove who they are to Kong. [Walkthrough](https://kuldeepbhati.com/posts/kong-mtls-client-certificate-authentication/)
-- **Part 2: Make Kong present a client certificate to the backend.** Kong proves who it is to a backend that only accepts mTLS. [Walkthrough](https://kuldeepbhati.com/posts/kong-mtls-upstream-client-certificate/), and [below](#part-2-make-kong-present-a-client-certificate-to-the-backend).
+- **Part 1: Authenticate API clients with mTLS certificates in Kong.** Client apps prove who they are to Kong. [Walkthrough](https://kuldeepbhati.com/posts/kong-mtls-client-certificate-authentication/)
+- **Part 2: Set up mTLS from Kong to the backend.** Kong proves who it is to a backend that only accepts mTLS. [Walkthrough](https://kuldeepbhati.com/posts/kong-mtls-upstream-client-certificate/), and [below](#part-2-set-up-mtls-from-kong-to-the-backend).
 
 Both run in the same lab. The sections up to "Use it for your own API" are Part 1.
 
@@ -141,7 +141,7 @@ Watch out for:
 - **TLS must end at Kong.** An L7 load balancer in front ends TLS, so Kong never sees the certificate. Use TCP passthrough, or have the edge forward the certificate to the [Header Cert Auth plugin](https://developer.konghq.com/plugins/header-cert-auth/), and make sure only the edge can reach Kong, so no one else can send that header.
 - **The gateway's server key** is in `kong/certs.yaml` here. In production, keep it in a vault and reference it.
 
-## Part 2: Make Kong present a client certificate to the backend
+## Part 2: Set up mTLS from Kong to the backend
 
 The backend (nginx) only accepts callers with a certificate from the backend CA. Kong presents `kong-upstream.crt` and checks the backend's certificate: signed by the same CA, with the service's host (`inventory`) as a name. `/inventory` doesn't authenticate callers: mTLS to the backend proves who Kong is, not who the caller is. Bonus: a second route also authenticates the client (Part 1), so the backend learns who called, only where it needs to.
 
@@ -207,6 +207,8 @@ The first returns `"consumer":"client-a"`. The second returns `"consumer":"admin
 | A gold client gets `403` on `/reports` | The ACL reads consumer groups only with `include_consumer_groups: true`. |
 | Part 2: every call to `/inventory` gets `502`, and the data plane logs `upstream SSL certificate verify error` | From 3.14, Kong checks the backend's certificate by default. Set `ca_certificates` to the backend CA on the service; `tls_verify: false` makes a hybrid data plane reject its configuration. |
 | Part 2: the client gets `400 No required SSL certificate was sent` | The service has no `client_certificate`, so Kong presented none. |
+| With `skip_consumer_lookup: true`, a trusted certificate gets `401 Certificate missing Common Name` | With `authenticated_group_by: CN` (the default), the CN becomes the authenticated group, so a certificate without a CN is refused. Add a CN, or use `authenticated_group_by: DN`. |
+| A service with `ca_certificates` gets `502` from a backend with a public certificate | A service's `ca_certificates` replaces the global trust store for that service; it doesn't add to it. List the CA that signed this backend's certificate. |
 | A consumer or credential removed from `kong/kong.yaml` still works | `make up` only creates and updates. Delete it in Konnect, or run `make clean` and `make up`. `make test` shows the leftover as drift. |
 
 ## Files
