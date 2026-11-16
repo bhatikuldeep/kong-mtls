@@ -48,3 +48,18 @@ services:
       - ./certs/inventory.crt:/certs/inventory.crt:ro
       - ./certs/inventory.key:/certs/inventory.key:ro
       - ./certs/backend-ca.crt:/certs/backend-ca.crt:ro
+
+  # Bonus: an edge that ends TLS in front of Kong, like a CDN or WAF, and passes the client certificate on
+  # in a header (make test-edge)
+  edge:
+    image: nginx:1.30.6-alpine@sha256:901e593c95dc85f5a729f5765516321366ef4ac401821431d408897e95287d0a
+    restart: unless-stopped
+    depends_on: [kong]
+    ports:
+      - "127.0.0.1:${EDGE_PORT:-7443}:8443"
+    volumes:
+      - ./edge/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs/edge.crt:/certs/edge.crt:ro
+      - ./certs/edge.key:/certs/edge.key:ro
+      - ./certs/client-ca.crt:/certs/client-ca.crt:ro
+      - ./certs/gateway-ca.crt:/certs/gateway-ca.crt:ro

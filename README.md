@@ -93,7 +93,7 @@ api -w "$s" --cert certs/rogue.crt --key certs/rogue.key $u/orders
 api -w "$s" --cert certs/client-d.crt --key certs/client-d.key $u/orders
 ```
 
-Then every check, Part 2 and the bonuses included. It ends with `26 passed, 0 failed`; if an earlier run used up this minute's rate limits, it waits for the next minute first:
+Then every check, Part 2 and the Step 5 bonus included (the Step 6 bonus has its own `make test-edge`). It ends with `26 passed, 0 failed`; if an earlier run used up this minute's rate limits, it waits for the next minute first:
 
 ```bash
 make test
@@ -120,7 +120,26 @@ Every call now carries a consumer, so the ACL plugin and plugins scoped to a con
     | jq '.headers["X-Consumer-Groups"]'
   ```
 
-## Step 6: Clean up
+## Step 6 (bonus): When a CDN or WAF ends TLS in front of Kong
+
+When something in front of Kong ends TLS, the client certificate stops there. The edge can check it and forward it in a header to the [Header Cert Auth plugin](https://developer.konghq.com/plugins/header-cert-auth/) (Kong Gateway 3.8+). `make up` also starts `edge`, an nginx that plays that role on 127.0.0.1:7443 (`EDGE_PORT` in `.env`):
+
+- it asks for a client certificate and checks it against the client CA (a bad one gets `400` there);
+- it replaces any `X-Client-Cert` header the client sent, and sets it only for a certificate it verified;
+- it adds `X-Origin-Verify`, a shared secret. Kong's `/edge/orders` route only matches with it.
+
+```bash
+make test-edge
+```
+
+It ends with `10 passed, 0 failed`. The certificate `partner` maps to the consumer `partner.example.test` (silver tier). What to know:
+
+- **A certificate is public.** The header carries the certificate, not proof of the private key. The last check sends a copy of partner's certificate straight to Kong with the origin secret and gets in as partner. Only the edge may reach Kong: a secret origin header plus the IP Restriction plugin allowing only the CDN's addresses, as in Kong's [Dedicated Cloud Gateway guide](https://developer.konghq.com/dedicated-cloud-gateways/public-network/). The secret here is a demo value.
+- **`secure_source` is on by default** and then accepts the header only from addresses in the data plane's `trusted_ips`. This data plane sets none, so `/edge/strict` (the default) gets `403`. Set `trusted_ips` to the edge's addresses, or set `secure_source: false` and protect the path as above.
+- **Header format.** nginx sends the PEM certificate URL-encoded (`url_encoded`). `base64_encoded` expects base64 DER on one line, the format of Cloudflare's `Cf-Client-Cert-Der-Base64`. Cloudflare's [RFC 9440](https://www.rfc-editor.org/rfc/rfc9440) `Client-Cert` header wraps it in colons, which Kong 3.16 answers with `500`; strip them with a Pre-function first (see the blog post).
+- **decK 1.70.1 rejects Header Cert Auth credentials** (`header_cert_auth_credentials`). Map with `consumer_by: [username]`, a consumer named after the certificate, or use `skip_consumer_lookup`. Client-a, which has only an mTLS Auth credential, gets `401` on `/edge/orders`.
+
+## Step 7: Clean up
 
 ```bash
 make down    # remove the containers, keep Konnect and the certificates
@@ -138,7 +157,7 @@ make clean   # also delete the Konnect control plane and the certificates
 
 Watch out for:
 
-- **TLS must end at Kong.** An L7 load balancer in front ends TLS, so Kong never sees the certificate. Use TCP passthrough, or have the edge forward the certificate to the [Header Cert Auth plugin](https://developer.konghq.com/plugins/header-cert-auth/), and make sure only the edge can reach Kong, so no one else can send that header.
+- **TLS must end at Kong.** A CDN, WAF or L7 load balancer that ends TLS hides the certificate from Kong. Use TCP passthrough, or see [the edge bonus](#step-6-bonus-when-a-cdn-or-waf-ends-tls-in-front-of-kong).
 - **The gateway's server key** is in `kong/certs.yaml` here. In production, keep it in a vault and reference it.
 
 ## Part 2: Set up mTLS from Kong to the backend
@@ -151,7 +170,7 @@ The backend (nginx) only accepts callers with a certificate from the backend CA.
 | Anyone → backend directly, no certificate | `400 No required SSL certificate was sent` |
 | Bonus: client-a → Kong → backend, `/inventory/whoami` | `200`; the backend also learns the consumer, `client-a` |
 
-Step 1 and Step 6 are the same as Part 1. The `api` helper and `u` come from Part 1's Step 4.
+Step 1 and Step 7 are the same as Part 1. The `api` helper and `u` come from Part 1's Step 4.
 
 ### Step 2: Check the certificates
 
@@ -210,6 +229,8 @@ The first returns `"consumer":"client-a"`. The second returns `"consumer":"admin
 | With `skip_consumer_lookup: true`, a trusted certificate gets `401 Certificate missing Common Name` | With `authenticated_group_by: CN` (the default), the CN becomes the authenticated group, so a certificate without a CN is refused. Add a CN, or use `authenticated_group_by: DN`. |
 | A service with `ca_certificates` gets `502` from a backend with a public certificate | A service's `ca_certificates` replaces the global trust store for that service; it doesn't add to it. List the CA that signed this backend's certificate. |
 | A consumer or credential removed from `kong/kong.yaml` still works | `make up` only creates and updates. Delete it in Konnect, or run `make clean` and `make up`. `make test` shows the leftover as drift. |
+| Header Cert Auth gets `403 Forbidden` for every request | `secure_source` (the default) accepts the header only from the data plane's `trusted_ips`. Add the edge's addresses there, or set `secure_source: false` and let only the edge reach Kong. |
+| Header Cert Auth gets `500 An unexpected error occurred`, and the log says `x509.new failed` | The header isn't in the format `certificate_header_format` names. An RFC 9440 `Client-Cert` value is wrapped in colons: strip them with a Pre-function first. |
 
 ## Files
 
@@ -218,9 +239,11 @@ The first returns `"consumer":"client-a"`. The second returns `"consumer":"admin
 | `kong/kong.yaml` | The gateway configuration (decK): consumers, consumer groups, the service, routes and plugins |
 | `kong/certs.yaml` | Generated by `scripts/certs.sh`: the client and backend CA certificates (no keys), the gateway's server certificate, and Kong's client certificate and key for the backend |
 | `konnect/control-plane.yaml` | The Konnect control plane and the data plane certificate (kongctl), which also runs decK for the two files above |
-| `compose.yaml` | The data plane, the echo backend (Part 1) and the nginx backend (Part 2) |
+| `compose.yaml` | The data plane, the echo backend (Part 1), the nginx backend (Part 2) and the edge (bonus) |
+| `scripts/test-edge.sh` | Step 6 bonus: the checks `make test-edge` runs |
+| `edge/nginx.conf` | Bonus: the edge that ends TLS, checks the client certificate and forwards it to Kong in a header |
 | `backend/nginx.conf` | Part 2: the backend that requires a client certificate from the backend CA |
-| `scripts/certs.sh` | The client CA, four client certificates, a self-signed rogue one, the gateway's certificate, the data plane's, and for Part 2 the backend CA, the backend's certificate and Kong's client certificate |
+| `scripts/certs.sh` | The client CA, five client certificates (one for the edge bonus), a self-signed rogue one, the gateway's and the edge's certificates, the data plane's, and for Part 2 the backend CA, the backend's certificate and Kong's client certificate |
 
 ## Licence
 
