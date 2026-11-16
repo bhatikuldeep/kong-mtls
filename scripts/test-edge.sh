@@ -3,6 +3,7 @@
 # passes it to Kong in the X-Client-Cert header. Kong's Header Cert Auth plugin checks it again and finds the consumer.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+[ -f certs/partner.crt ] || { echo "Run make up first: it creates the edge and its certificates"; exit 1; }
 set -a; source .env; set +a
 edge_port=${EDGE_PORT:-7443}; kong_port=${GATEWAY_PORT:-8443}
 pass=0; fail=0
