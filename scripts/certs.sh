@@ -3,8 +3,10 @@
 #   client-ca           the CA that issues client certificates (Kong trusts it)
 #   client-a, -b, -c    client certificates issued by client-ca, mapped to the gold, silver and bronze consumers
 #   client-d            issued by client-ca too, but mapped to no consumer
+#   partner             bonus: issued by client-ca, sent to Kong in a header by the edge
 #   rogue               a self-signed certificate that claims to be client-a
 #   gateway-ca, gateway the certificate Kong serves for api.example.test, and the CA clients use to check it
+#   edge                bonus: the certificate the edge serves for edge.example.test, from gateway-ca
 #   dp                  the data plane's certificate for its connection to Konnect
 #   backend-ca          Part 2: the backend's CA; it signs the two certificates below
 #   inventory           Part 2: the certificate the backend serves (Kong checks it against backend-ca)
@@ -43,6 +45,7 @@ leaf client-a client-ca client-a.example.test clientAuth
 leaf client-b client-ca client-b.example.test clientAuth
 leaf client-c client-ca client-c.example.test clientAuth
 leaf client-d client-ca client-d.example.test clientAuth
+leaf partner client-ca partner.example.test clientAuth   # bonus: the edge
 
 # Same name as client-a, but self-signed: it must be rejected
 [ -f rogue.crt ] || openssl req -x509 -new -nodes -newkey rsa:2048 -days "$DAYS" \
@@ -52,6 +55,7 @@ leaf client-d client-ca client-d.example.test clientAuth
 
 ca gateway-ca "Example Gateway CA"
 leaf gateway gateway-ca api.example.test serverAuth
+leaf edge gateway-ca edge.example.test serverAuth         # bonus: the edge
 
 # Part 2: the backend's CA, the backend's server certificate and Kong's client certificate for the backend
 ca backend-ca "Example Backend CA"

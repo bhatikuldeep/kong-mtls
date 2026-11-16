@@ -64,6 +64,13 @@ consumers:
         subject_name: client-c.example.test
         ca_certificate: { id: 5b1e0c62-6f0a-4c39-9a11-000000000001 }
 
+  # Bonus (make test-edge): a client whose certificate reaches Kong in a header from the edge. decK can't
+  # declare Header Cert Auth credentials, so the plugin maps the certificate's name to this username instead.
+  - username: partner.example.test
+    custom_id: app-2001
+    groups:
+      - name: silver
+
 services:
   - name: orders-api
     url: http://orders:8080/anything   # the echo upstream in compose.yaml
@@ -120,4 +127,43 @@ services:
                 - 5b1e0c62-6f0a-4c39-9a11-000000000001
               ssl_verify: true
               consumer_by: []
+              revocation_check_mode: SKIP
+
+  # Bonus (make test-edge): an edge in front ends TLS, checks the client certificate and sends it in a header.
+  - name: orders-api-edge
+    url: http://orders:8080/anything
+    routes:
+      - name: edge-orders
+        protocols: [https]
+        paths: [/edge/orders]
+        headers:
+          x-origin-verify: [demo-origin-secret]   # only requests that came through the edge match
+        plugins:
+          - name: header-cert-auth
+            config:
+              ca_certificates:
+                - 5b1e0c62-6f0a-4c39-9a11-000000000001
+              certificate_header_name: X-Client-Cert
+              certificate_header_format: url_encoded   # what the edge sends: the PEM certificate, URL-encoded
+              # The default (true) accepts the header only from addresses in the data plane's trusted_ips,
+              # which this data plane doesn't set. The route's origin header stands in for it.
+              secure_source: false
+              consumer_by: [username]   # the certificate's name must equal a consumer's username
+              ssl_verify: true
+              revocation_check_mode: SKIP
+      # The same plugin with secure_source left at its default
+      - name: edge-strict
+        protocols: [https]
+        paths: [/edge/strict]
+        headers:
+          x-origin-verify: [demo-origin-secret]
+        plugins:
+          - name: header-cert-auth
+            config:
+              ca_certificates:
+                - 5b1e0c62-6f0a-4c39-9a11-000000000001
+              certificate_header_name: X-Client-Cert
+              certificate_header_format: url_encoded
+              consumer_by: [username]
+              ssl_verify: true
               revocation_check_mode: SKIP
