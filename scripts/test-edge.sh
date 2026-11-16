@@ -26,6 +26,14 @@ resp()     { awk -v h="$(tr 'A-Z' 'a-z' <<<"$1")" -F': ' 'tolower($1)==h {print 
 # A certificate is public: anyone who has seen it can copy it into a header. This is that copy.
 copied=$(jq -sRr @uri certs/partner.crt)
 
+# Partner is silver (5 calls a minute) and each run uses 3. If earlier runs used up this minute's calls,
+# wait for the next window, so every run checks the same things.
+request edge partner /edge/orders
+left=$(resp RateLimit-Remaining); reset=$(resp RateLimit-Reset)
+if [ "${left:-0}" -lt 2 ] && [ "${reset:-0}" -gt 0 ]; then
+  echo "Waiting ${reset}s for a fresh rate-limit window"; sleep $((reset + 1))
+fi
+
 echo "1. Through the edge"
 request edge partner /edge/orders
 check "partner: 200"                                 "$code" "200"
